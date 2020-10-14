@@ -5,15 +5,10 @@ import (
 	"fmt"
 	"log"
 
+	ed "../ed"
+
 	_ "github.com/mattn/go-sqlite3" //solo para sqlite
 )
-
-type usuario struct {
-	nombre   string
-	apellido string
-	email    string
-	id       int
-}
 
 // func (u *usuario) datosUsuarios() usuario {
 // 	return &u
@@ -25,8 +20,8 @@ func Agregar(cola string, mensaje string) {
 	fmt.Println(msg)
 }
 
-//Leer la base de datos
-func Leer() {
+//ListarUsuarios lista usuarios
+func ListarUsuarios() []ed.Usuario {
 
 	db, err := sql.Open("sqlite3", "./iasc.db")
 	if err != nil {
@@ -34,15 +29,50 @@ func Leer() {
 	}
 	defer db.Close()
 
-	rows, err := db.Query("select * from usuarios")
+	rows, err := db.Query("select id, email, nombre, apellido from usuarios")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	var usuarios []ed.Usuario
+
+	for rows.Next() {
+		var u ed.Usuario
+
+		err = rows.Scan(&u.Id, &u.Email, &u.Nombre, &u.Apellido)
+		if err != nil {
+			log.Fatal(err)
+		}
+		//fmt.Println(u)
+		usuarios = append(usuarios, u)
+	}
+	err = rows.Err()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return usuarios
+}
+
+//Leer la base de datos
+func Leer() {
+
+	db, err := sql.Open("sqlite3", "./bd/iasc.db")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	rows, err := db.Query("select id, email, nombre, apellido from usuarios")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var u usuario
+		var u ed.Usuario
 
-		err = rows.Scan(&u)
+		err = rows.Scan(&u.Id, &u.Email, &u.Nombre, &u.Apellido)
 		if err != nil {
 			log.Fatal(err)
 		}
