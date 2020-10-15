@@ -2,10 +2,15 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
+	"sync"
 
+	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 )
 
@@ -21,18 +26,14 @@ import (
 // 	bd.Leer()
 // }
 
-//ListarUsuarios es para leer la base de datos
+//  ListarUsuarios es para leer la base de datos
 // func ListarUsuarios() []ed.Usuario {
 // 	return bd.ListarUsuarios()
 // }
-//Cliente corresponde a los clientes que se conectan al broker
-type Cliente struct {
-	ID int
-	ws *websocket.Conn
-}
 
 //Clientes son el conjunto de cliente conectados
-var Clientes = make(map[int]Cliente)
+var Clientes = make(map[string]Cliente)
+var mClientes sync.Mutex
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -48,15 +49,32 @@ func reader(client Cliente) {
 
 		messageType, msg, err := client.ws.ReadMessage()
 		if err != nil {
-			fmt.Println("Eliminando cliente")
-			delete(Clientes, client.ID)
+
+			eliminarCliente(client)
 			//log.Fatal(err)
 			client.ws.Close()
-			fmt.Println("Clientes actuales")
-			fmt.Println(Clientes)
+			fmt.Println("Cliente eliminado.  Restantes:", len(Clientes))
+
 			return
 		}
-		log.Println(string(msg))
+		reader := strings.NewReader(string(msg))
+
+		dec := json.NewDecoder(reader)
+		var m Mensaje
+		err = dec.Decode(&m)
+		if err != nil {
+			log.Fatal("Error en el unMarshall del mensaje recibido")
+		}
+
+		if m.Persiste {
+			fmt.Println("persistiendo")
+			_, err := BDAgregarMensaje(m)
+			if err != nil {
+				fmt.Println("Error al persistir")
+			}
+		}
+
+		//fmt.Println("Mensaje del Cliente", m)
 		name := [][]byte{msg, []byte("from server")}
 		sep := []byte("-")
 
@@ -68,7 +86,34 @@ func reader(client Cliente) {
 		}
 	}
 }
+
+func agregarCliente(c Cliente) {
+	mClientes.Lock()
+
+	Clientes[c.ID] = c
+	// fmt.Println("-------Clientes----------")
+	// for _, cli := range Clientes {
+	// 	fmt.Println(cli.ID)
+	// }
+	// fmt.Println("-------------------------")
+
+	mClientes.Unlock()
+
+}
+
+func eliminarCliente(c Cliente) {
+	mClientes.Lock()
+
+	delete(Clientes, c.ID)
+
+	mClientes.Unlock()
+
+}
+
 func wsEndPoint(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	//fmt.Println("nuevo cliente", vars["email"])
+
 	upgrader.CheckOrigin = func(r *http.Request) bool {
 		return true
 	}
@@ -76,26 +121,33 @@ func wsEndPoint(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Println("Nuevo Cliente conectado")
+
+	myUUID, err := uuid.NewUUID()
+	if err != nil {
+		log.Fatal("No se pudo generar el uuid")
+	}
 	// lo agrego a mi lista de usuarios conectados
 	var nc Cliente
-	nro := len(Clientes)
-
-	nc.ID = nro
+	nc.ID = myUUID.String()
+	nc.email = vars["email"]
 	nc.ws = ws
 
-	Clientes[nro] = nc
-	fmt.Println(Clientes)
+	agregarCliente(nc)
+
+	log.Println("Nuevo Cliente conectado", len(Clientes))
+	//fmt.Println(Clientes)
 
 	reader(nc)
 }
-func setUpRoutes() {
-	http.HandleFunc("/", homePage)
-	http.HandleFunc("/ws", wsEndPoint)
-}
+
 func main() {
-	setUpRoutes()
+	r := mux.NewRouter()
+
+	r.HandleFunc("/", homePage)
+	r.HandleFunc("/ws/{email}", wsEndPoint)
+
 	//fmt.Println(ListarUsuarios())
 	fmt.Println("Web socket server en 8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	http.ListenAndServe(":8080", r)
+
 }

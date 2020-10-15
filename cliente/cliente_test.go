@@ -6,12 +6,9 @@ import (
 
 func TestConnections(t *testing.T) {
 	t.Run(
-		"Go can add", func(t *testing.T) {
-			cant, err := ClienteAutomatico(5)
-			if err != nil {
-				t.Fail()
-			}
-			if cant != 5 {
+		"conexiones concurrentes", func(t *testing.T) {
+			rdo := ClienteAutomatico(10, 2, false)
+			if rdo != "OK" {
 				t.Fail()
 			}
 

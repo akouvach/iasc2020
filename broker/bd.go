@@ -1,11 +1,9 @@
-package bd
+package main
 
 import (
 	"database/sql"
 	"fmt"
 	"log"
-
-	ed "../ed"
 
 	_ "github.com/mattn/go-sqlite3" //solo para sqlite
 )
@@ -14,14 +12,41 @@ import (
 // 	return &u
 // }
 
-//Agregar recibe 2 parametros
-func Agregar(cola string, mensaje string) {
-	var msg = fmt.Sprintf("Agregando %s a la cola %s", mensaje, cola)
-	fmt.Println(msg)
+//BDAgregarMensaje recibe 2 parametros
+func BDAgregarMensaje(m Mensaje) (int, error) {
+	db, err := sql.Open("sqlite3", "./iasc.db")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	sqlAdditem := `
+	INSERT OR REPLACE INTO mensajes_sinprocesar(
+		id,
+		destino,
+		tipo,
+		payload,
+		fecha
+	) values(?, ?, ?, ?, CURRENT_TIMESTAMP)
+	`
+
+	stmt, err := db.Prepare(sqlAdditem)
+	if err != nil {
+		panic(err)
+	}
+	defer stmt.Close()
+
+	_, err2 := stmt.Exec(m.ID, m.Destino, m.Tipo, m.Payload)
+	if err2 != nil {
+		fmt.Println("Error al agregar mensaje en BD")
+		panic(err2)
+	}
+	return 1, nil
+
 }
 
 //ListarUsuarios lista usuarios
-func ListarUsuarios() []ed.Usuario {
+func ListarUsuarios() []Usuario {
 
 	db, err := sql.Open("sqlite3", "./iasc.db")
 	if err != nil {
@@ -35,12 +60,12 @@ func ListarUsuarios() []ed.Usuario {
 	}
 	defer rows.Close()
 
-	var usuarios []ed.Usuario
+	var usuarios []Usuario
 
 	for rows.Next() {
-		var u ed.Usuario
+		var u Usuario
 
-		err = rows.Scan(&u.Id, &u.Email, &u.Nombre, &u.Apellido)
+		err = rows.Scan(&u.ID, &u.Email, &u.Nombre, &u.Apellido)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -70,9 +95,9 @@ func Leer() {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var u ed.Usuario
+		var u Usuario
 
-		err = rows.Scan(&u.Id, &u.Email, &u.Nombre, &u.Apellido)
+		err = rows.Scan(&u.ID, &u.Email, &u.Nombre, &u.Apellido)
 		if err != nil {
 			log.Fatal(err)
 		}
