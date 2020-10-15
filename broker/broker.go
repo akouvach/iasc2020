@@ -51,7 +51,7 @@ func reader(client Cliente) {
 		if err != nil {
 
 			eliminarCliente(client)
-			//log.Fatal(err)
+			BDEliminarUsuarioConectado(client.email)
 			client.ws.Close()
 			fmt.Println("Cliente eliminado.  Restantes:", len(Clientes))
 
@@ -133,6 +133,7 @@ func wsEndPoint(w http.ResponseWriter, r *http.Request) {
 	nc.ws = ws
 
 	agregarCliente(nc)
+	BDAgregarUsuarioConectado(nc.email)
 
 	log.Println("Nuevo Cliente conectado", len(Clientes))
 	//fmt.Println(Clientes)

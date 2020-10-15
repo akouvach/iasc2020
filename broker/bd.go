@@ -45,6 +45,56 @@ func BDAgregarMensaje(m Mensaje) (int, error) {
 
 }
 
+//BDAgregarUsuarioConectado agrega un usuario cuando se inicia sesion
+func BDAgregarUsuarioConectado(email string) (int, error) {
+	db, err := sql.Open("sqlite3", "./iasc.db")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	sqlAdditem := `INSERT OR REPLACE INTO usuarios_conectados(email) values(?)`
+
+	stmt, err := db.Prepare(sqlAdditem)
+	if err != nil {
+		panic(err)
+	}
+	defer stmt.Close()
+
+	_, err2 := stmt.Exec(email)
+	if err2 != nil {
+		fmt.Println("Error al agregar usuarios conectado en BD")
+		panic(err2)
+	}
+	return 1, nil
+
+}
+
+//BDEliminarUsuarioConectado elimina a los usuarios conectados
+func BDEliminarUsuarioConectado(email string) (int, error) {
+	db, err := sql.Open("sqlite3", "./iasc.db")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	sqlAdditem := `delete from usuarios_conectados where email = ?`
+
+	stmt, err := db.Prepare(sqlAdditem)
+	if err != nil {
+		panic(err)
+	}
+	defer stmt.Close()
+
+	_, err2 := stmt.Exec(email)
+	if err2 != nil {
+		fmt.Println("Error al eliminar usuarios conectado en BD")
+		panic(err2)
+	}
+	return 1, nil
+
+}
+
 //ListarUsuarios lista usuarios
 func ListarUsuarios() []Usuario {
 

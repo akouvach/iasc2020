@@ -176,7 +176,7 @@ func crearYEnviar(i int, cantMensajesxConexion int, wgg *sync.WaitGroup, persist
 
 	var wg sync.WaitGroup
 
-	email := "akouvach@yahoo.com"
+	email := fmt.Sprintf("akouvach@yahoo.com%d", i)
 	c := connect(email)
 	defer c.Close()
 
