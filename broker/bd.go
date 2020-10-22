@@ -1,188 +1,303 @@
 package main
 
 import (
-	"database/sql"
+	"encoding/json"
 	"fmt"
-	"log"
 
-	_ "github.com/mattn/go-sqlite3" //solo para sqlite
+	"gopkg.in/redis.v3"
+	//"github.com/go-redis/redis"
 )
+
+//UC es la estructura para la lista de usuarios conectados
+const UC = "usuariosconectados"
+
+//US es la estructura que mantiene la lista de usuarios
+const US = "usuarios"
+
+//SUS es la estructura que mantiene la lista de suscripciones
+const SUS = "suscripciones"
+
+func connectRedis() *redis.Client {
+	client := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "",
+		DB:       0,
+	})
+	return client
+}
 
 // func (u *usuario) datosUsuarios() usuario {
 // 	return &u
 // }
 
-//BDAgregarMensaje recibe 2 parametros
+//BDAgregarMensaje 1 parametros
 func BDAgregarMensaje(m Mensaje) (int, error) {
-	db, err := sql.Open("sqlite3", "./iasc.db")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
+	rdb := connectRedis()
+	defer rdb.Close()
 
-	sqlAdditem := `
-	INSERT OR REPLACE INTO mensajes_sinprocesar(
-		id,
-		destino,
-		tipo,
-		payload,
-		fecha
-	) values(?, ?, ?, ?, CURRENT_TIMESTAMP)
-	`
+	//pong, err := rdb.Ping().Result()
+	fmt.Println("BDAgregarMensaje")
 
-	stmt, err := db.Prepare(sqlAdditem)
-	if err != nil {
-		panic(err)
-	}
-	defer stmt.Close()
+	// 	err = client.Set("name", "Elliot", 0).Err()
+	// // if there has been an error setting the value
+	// // handle the error
+	// if err != nil {
+	//     fmt.Println(err)
+	// }
 
-	_, err2 := stmt.Exec(m.ID, m.Destino, m.Tipo, m.Payload)
-	if err2 != nil {
-		fmt.Println("Error al agregar mensaje en BD")
-		panic(err2)
-	}
+	// val, err := client.Get("name").Result()
+	// if err != nil {
+	//     fmt.Println(err)
+	// }
+
+	// fmt.Println(val)
+
+	// json, err := json.Marshal(Author{Name: "Elliot", Age: 25})
+	// if err != nil {
+	// 	fmt.Println(err)
+	// }
+
+	// err = client.Set("id1234", json, 0).Err()
+	// if err != nil {
+	// 	fmt.Println(err)
+	// }
+	// val, err := client.Get("id1234").Result()
+	// if err != nil {
+	// 	fmt.Println(err)
+	// }
+	// fmt.Println(val)
+
 	return 1, nil
 
 }
 
 //BDAgregarUsuarioConectado agrega un usuario cuando se inicia sesion
 func BDAgregarUsuarioConectado(email string) (int, error) {
-	db, err := sql.Open("sqlite3", "./iasc.db")
+
+	rdb := connectRedis()
+	defer rdb.Close()
+
+	err := rdb.LPush(UC, email).Err()
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println(err)
 	}
-	defer db.Close()
+	fmt.Println("Agregar usuarios conectado ", email)
 
-	sqlAdditem := `INSERT OR REPLACE INTO usuarios_conectados(email) values(?)`
+	//usuarios := rdb.LRange(UC, 0, 10)
+	// if err != nil {
+	// 	if err == redis.Nil {
+	// 		fmt.Println("key does not exists")
+	// 		return 0, err
+	// 	}
+	// 	return 0, err
+	// }
+	//fmt.Println("usuarios", usuarios)
 
-	stmt, err := db.Prepare(sqlAdditem)
-	if err != nil {
-		panic(err)
-	}
-	defer stmt.Close()
-
-	_, err2 := stmt.Exec(email)
-	if err2 != nil {
-		fmt.Println("Error al agregar usuarios conectado en BD")
-		panic(err2)
-	}
 	return 1, nil
+
+}
+
+//BDSuscribir agrega un usuario cuando se inicia sesion
+func BDSuscribir(canal string, c chan string) error {
+
+	rdb := connectRedis()
+	defer rdb.Close()
+
+	//Me suscribo a un canal con mi mail
+	pubsub, err := rdb.Subscribe(canal)
+	if err != nil {
+		fmt.Println("error al suscribirse al canal")
+	}
+
+	fmt.Println("Suscrpcion correcta", pubsub)
+
+	for {
+		mess, err := pubsub.ReceiveMessage()
+		if err != nil {
+			fmt.Println("error al recibir la pubsub", err)
+			break
+		}
+		//envio el mensage por el canal
+		c <- mess.String()
+	}
+
+	return nil
+
+}
+
+//BDCanalesSuscriptos son las suscripciones existentes
+func BDCanalesSuscriptos(email string) ([]Suscripcion, error) {
+
+	rdb := connectRedis()
+	defer rdb.Close()
+
+	var usuSus []Suscripcion
+
+	cant, err := rdb.LLen(SUS).Result()
+	if err != nil {
+		return usuSus, err
+	}
+
+	suscripciones, err := rdb.LRange(SUS, 0, cant).Result()
+	if err != nil {
+		return usuSus, err
+	}
+
+	fmt.Println(suscripciones)
+
+	for _, s := range suscripciones {
+
+		var auxSus Suscripcion
+
+		err = json.Unmarshal([]byte(s), &auxSus)
+		if err != nil {
+			fmt.Println("Error! al unmarshall de Suscripcion")
+			return usuSus, err
+		}
+
+		for _, p := range auxSus.Participantes {
+			if p.email == email {
+				//esta en esta suscripcion.  Agrego la suscripcion
+				usuSus = append(usuSus, auxSus)
+				break
+			}
+		}
+	}
+
+	return usuSus, nil
 
 }
 
 //BDEliminarUsuarioConectado elimina a los usuarios conectados
 func BDEliminarUsuarioConectado(email string) (int, error) {
-	db, err := sql.Open("sqlite3", "./iasc.db")
+
+	rdb := connectRedis()
+	defer rdb.Close()
+
+	// pong, err := client.Ping().Result()
+	// fmt.Println("BDEliminarUsuarioConectado", pong, err)
+
+	//client.LRange(UC).Err()
+
+	var cont int64 = 0
+
+	val, err := rdb.LRem(UC, cont, email).Result()
 	if err != nil {
-		log.Fatal(err)
+		return 0, err
 	}
-	defer db.Close()
 
-	sqlAdditem := `delete from usuarios_conectados where email = ?`
+	fmt.Println("Se elimino un usuario conectado ", email, val)
 
-	stmt, err := db.Prepare(sqlAdditem)
-	if err != nil {
-		panic(err)
-	}
-	defer stmt.Close()
+	// cant, err := rdb.LLen(UC).Result()
+	// if err != nil {
+	// 	return 0, err
+	// }
 
-	_, err2 := stmt.Exec(email)
-	if err2 != nil {
-		fmt.Println("Error al eliminar usuarios conectado en BD")
-		panic(err2)
-	}
+	// usuarios, err := rdb.LRange(UC, 0, cant).Result()
+	// if err != nil {
+	// 	return 0, err
+	// }
+
+	// fmt.Println(usuarios)
+
+	// for i, v := range usuarios {
+	// 	if v == email {
+	// 		// Found!
+	// 		var cont int64 = 0
+	// 		var a interface{}
+
+	// 	}
+	// }
+
 	return 1, nil
 
 }
 
-//ListarUsuarios lista usuarios
-func ListarUsuarios() []Usuario {
+//BDListarUsuarios lista usuarios
+func BDListarUsuarios() ([]Usuario, error) {
 
-	db, err := sql.Open("sqlite3", "./iasc.db")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
-
-	rows, err := db.Query("select id, email, nombre, apellido from usuarios")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer rows.Close()
+	rdb := connectRedis()
+	defer rdb.Close()
 
 	var usuarios []Usuario
 
-	for rows.Next() {
-		var u Usuario
+	// pong, err := client.Ping().Result()
 
-		err = rows.Scan(&u.ID, &u.Email, &u.Nombre, &u.Apellido)
+	cant, err := rdb.LLen(US).Result()
+	if err != nil {
+		return usuarios, err
+	}
+
+	users, err := rdb.LRange(US, 0, cant).Result()
+	if err != nil {
+		return usuarios, err
+	}
+
+	for _, v := range users {
+		var u Usuario
+		err = json.Unmarshal([]byte(v), &u)
 		if err != nil {
-			log.Fatal(err)
+			return usuarios, err
 		}
-		//fmt.Println(u)
 		usuarios = append(usuarios, u)
 	}
-	err = rows.Err()
-	if err != nil {
-		log.Fatal(err)
+
+	//fmt.Println(users)
+
+	return usuarios, nil
+}
+
+//BDAgregarUsuarios sirve para precargar la base
+func BDAgregarUsuarios(cant int) error {
+
+	rdb := connectRedis()
+	defer rdb.Close()
+
+	for i := 1; i <= cant; i++ {
+		var usu Usuario
+
+		usu.Apellido = fmt.Sprintf("Kouvach%d", i)
+		usu.Email = fmt.Sprintf("akouvach@yahoo.com%d", i)
+		usu.Nombre = fmt.Sprintf("Andres%d", i)
+		usu.ID = i
+
+		usuario, err := json.Marshal(usu)
+		if err != nil {
+			return err
+		}
+
+		err = rdb.LPush(US, string(usuario)).Err()
+		if err != nil {
+			fmt.Println(err)
+		}
+		//fmt.Println("Usuario agregado ", usuario)
+
 	}
 
-	return usuarios
+	// pong, err := client.Ping().Result()
+
+	// err = json.Unmarshal([]byte(users), &usuarios)
+	// if err != nil {
+	// 	return usuarios, err
+	// }
+
+	// for i, v := range usuarios {
+	// 	if v == email {
+	// 		// Found!
+	// 		var cont int64 = 0
+	// 		var a interface{}
+
+	// 	}
+	// }
+
+	return nil
 }
 
 //Leer la base de datos
 func Leer() {
 
-	db, err := sql.Open("sqlite3", "./bd/iasc.db")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
-
-	rows, err := db.Query("select id, email, nombre, apellido from usuarios")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var u Usuario
-
-		err = rows.Scan(&u.ID, &u.Email, &u.Nombre, &u.Apellido)
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Println(u)
-	}
-	err = rows.Err()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// sqlStmt := `
-	// create table foo (id integer not null primary key, name text);
-	// delete from foo;
-	// `
-	// _, err = db.Exec(sqlStmt)
-	// if err != nil {
-	// 	log.Printf("%q: %s\n", err, sqlStmt)
-	// 	return
-	// }
-
-	// tx, err := db.Begin()
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// stmt, err := tx.Prepare("insert into foo(id, name) values(?, ?)")
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// defer stmt.Close()
-	// for i := 0; i < 100; i++ {
-	// 	_, err = stmt.Exec(i, fmt.Sprintf("こんにちわ世界%03d", i))
-	// 	if err != nil {
-	// 		log.Fatal(err)
-	// 	}
-	// }
-	// tx.Commit()
+	client := connectRedis()
+	pong, err := client.Ping().Result()
+	fmt.Println("Leer", pong, err)
 
 }

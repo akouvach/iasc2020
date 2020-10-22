@@ -5,12 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
-	"bytes"
 	"encoding/json"
 
 	"github.com/gorilla/websocket"
@@ -18,34 +19,6 @@ import (
 
 var addr = flag.String("addr", "localhost:8080", "http service address")
 
-//Mensaje es lo que deben pasar los websocket
-type Mensaje struct {
-	ID       string `json:"id"`
-	Destino  string `json:"destino"`
-	Tipo     string `json:"tipo"`
-	Persiste bool   `json:"persiste"`
-	Payload  string `json:"payload"`
-}
-
-/*
-"fmt"
-
- "bytes"
-  "encoding/json"
-
-
-type MyStruct struct {
-	Name string `json:"name"`
-  }
-  func main() {
-	testStruct := MyStruct{"hello world"}
-	reqBodyBytes := new(bytes.Buffer)
-	json.NewEncoder(reqBodyBytes).Encode(testStruct)
-
-	fmt.Println(reqBodyBytes.Bytes()) // this is the []byte
-	fmt.Println(string(reqBodyBytes.Bytes())) // converted back to show it's your original object
-  }
-*/
 // br "../broker"
 func mensajesSinLeer() {
 	fmt.Println("Mensajes sin leer")
@@ -54,8 +27,8 @@ func mostrarMenu(email string) {
 	fmt.Println("Message System - " + email)
 	fmt.Println("---------------------")
 	fmt.Println("Para enviar mensaje: enviar usuario mensaje")
-	fmt.Println("Para listar usuarios: listar usuarios regexp")
-	fmt.Println("Para leer los mensajes: leer origen")
+	fmt.Println("Para listar usuarios: listar")
+	fmt.Println("Para leer los mensajes: leer canal")
 	fmt.Println("---------------------")
 	fmt.Println("Mensajes sin leer")
 	fmt.Println("---------------------")
@@ -63,70 +36,65 @@ func mostrarMenu(email string) {
 
 }
 
-func reader(conn *websocket.Conn, wg *sync.WaitGroup) {
+func recibirDelServidor(conn *websocket.Conn, c chan string) {
 	//defer close(done)
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			log.Println("read:", err)
+			close(c) //cierro el canal
 			return
 		}
 
-		wg.Done()
+		//se lo envio al cana que lo procesara
+		c <- string(msg)
+	}
+}
 
-		reader := strings.NewReader(string(msg))
+func mostrarUsuarios(m Mensaje) {
 
-		dec := json.NewDecoder(reader)
+	var usuarios []Usuario
+
+	err2 := json.Unmarshal([]byte(m.Payload), &usuarios)
+	if err2 != nil {
+		fmt.Println("Error! al unmarshall del payload", err2)
+	}
+
+	for _, u := range usuarios {
+		fmt.Println(u.Email)
+	}
+}
+
+func procesarMensajeDelServidor(conn *websocket.Conn, c chan string, email string) {
+	//defer close(done)
+	for msg := range c {
+		fmt.Println("recibiendo mensaje...")
+
 		var m Mensaje
-		err = dec.Decode(&m)
+
+		err := json.Unmarshal([]byte(msg), &m)
 		if err != nil {
-			log.Fatal("Error en el unMarshall del mensaje recibido en el Cliente")
+			fmt.Println("Error! al unmarshall del mensaje recibido", err)
 		}
 
-		log.Printf("\t\t\t r: %s de %s", m.Payload, m.ID)
+		//ya tengo el mensaje recibid
+		//en funcion del tipo es que se lo mando a otro
+		//para procesarlo
+
+		if m.Tipo == "auto" && m.ID == "server" {
+			//corresponden a peticiones que se le hicieron al servidor
+			switch m.Destino {
+			case "listarUsuarios":
+				mostrarUsuarios(m)
+			default:
+				fmt.Println("funcionalidad no itentificada")
+			}
+
+		}
+
+		mostrarMenu(email)
+
 	}
-}
-
-func enviarMensaje(ws *websocket.Conn, m Mensaje) error {
-	myBuffer := new(bytes.Buffer)
-	json.NewEncoder(myBuffer).Encode(m)
-	//fmt.Println("estoy por mandar ", myBuffer.Bytes())
-	err := ws.WriteMessage(websocket.TextMessage, myBuffer.Bytes())
-	if err != nil {
-		return err
-	}
-
-	return nil
-
-}
-
-// func listar(ws *websocket.Conn, email string, comandos []string) {
-// 	// usuarios := br.ListarUsuarios()
-
-// 	msg := Mensaje{
-// 		ID:       email,
-// 		Destino:  "usuarios",
-// 		Tipo:     "directo",
-// 		Persiste: false,
-// 		Payload:  comandos[1],
-// 	}
-
-// 	err := enviarMensaje(ws, msg)
-// 	if err != nil {
-// 		fmt.Println("Error al enviar mensaje: ", msg)
-// 	}
-// 	// El tipo del mensaje podria ser  Directo / grupo / Tema
-
-// }
-
-func leer() {
-	fmt.Println("Leer ")
-
-}
-
-func enviar() {
-
-	fmt.Println("Enviar ")
 }
 
 func connect(email string) *websocket.Conn {
@@ -158,14 +126,15 @@ func enviarMensajes(email string, ws *websocket.Conn, cant int, persiste bool) {
 			Payload:  "pl " + fmt.Sprintf("%d", i),
 		}
 
+		//Espera simulada
+		espera := rand.Intn(3)
+		time.Sleep(time.Duration(espera) * time.Second)
+
 		err := enviarMensaje(ws, msg)
 		if err != nil {
 			fmt.Println("Error al enviar mensaje: ", msg)
 		}
 
-		//Espera simulada
-		// espera := rand.Intn(3)
-		// time.Sleep(time.Duration(espera) * time.Second)
 	}
 
 }
@@ -174,20 +143,18 @@ func crearYEnviar(i int, cantMensajesxConexion int, wgg *sync.WaitGroup, persist
 
 	defer wgg.Done()
 
-	var wg sync.WaitGroup
-
 	email := fmt.Sprintf("akouvach@yahoo.com%d", i)
 	c := connect(email)
 	defer c.Close()
 
-	wg.Add(cantMensajesxConexion)
 	//Envio mensajes
 	go enviarMensajes(email, c, cantMensajesxConexion, persiste)
 
+	ch := make(chan string)
+	defer close(ch)
 	// me quedo esperando los mensajes de vuelta del servidor
-	go reader(c, &wg)
+	go recibirDelServidor(c, ch)
 
-	wg.Wait()
 	fmt.Println(fmt.Sprintf("Se termino de procesar los mensajes de %d", i))
 
 }
@@ -213,12 +180,43 @@ func ClienteAutomatico(cantConexiones int, cantMensajesxConexion int, persiste b
 
 }
 
-func main() {
+func enviarMensaje(ws *websocket.Conn, m Mensaje) error {
 
-	// cant, err := ClienteAutomatico(2)
-	// if err != nil {
-	// 	fmt.Println("Errores", err, cant)
-	// }
+	msg, err := json.Marshal(m)
+	if err != nil {
+		fmt.Println("error en el marshal", err)
+		return err
+	}
+
+	err2 := ws.WriteMessage(websocket.TextMessage, msg)
+	if err2 != nil {
+		fmt.Println("error al enviar mensaje desde el cliente", err2)
+		return err2
+	}
+
+	return nil
+
+}
+
+func obtenerUsuarios(c *websocket.Conn, email string) {
+
+	msg := Mensaje{
+		ID:       email,
+		Destino:  "",
+		Tipo:     "auto",
+		Persiste: true,
+		Payload:  "listarUsuarios",
+	}
+
+	//Envio mensajes
+	err := enviarMensaje(c, msg)
+	if err != nil {
+		fmt.Println("Error al enviar mensaje: ", msg)
+	}
+
+}
+
+func main() {
 
 	args := os.Args[1:]
 	if len(args) == 0 {
@@ -227,15 +225,23 @@ func main() {
 	email := args[0]
 	fmt.Println("Bienvenido ", email)
 
-	reader := bufio.NewReader(os.Stdin)
+	myReader := bufio.NewReader(os.Stdin)
 
-	//creo una conexion para este cliente
-	//c := connect()
+	c := connect(email)
+	defer c.Close()
+
+	//Abro un canal que recibira mensajes del servidor
+	ch := make(chan string)
+	defer close(ch) // cierro el canal cuando termine
+
+	go recibirDelServidor(c, ch) //a este canal, llegaran los mensajes del servidor
+
+	go procesarMensajeDelServidor(c, ch, email) // el anterior canal, se los mandara a este, para procesar
 
 	for {
 		mostrarMenu(email)
 		fmt.Print("-> ")
-		text, _ := reader.ReadString('\n')
+		text, _ := myReader.ReadString('\n')
 		// convert CRLF to LF
 		//text = strings.Replace(text, "\n", " ", -1)
 
@@ -254,27 +260,20 @@ func main() {
 		case "listar":
 			fmt.Println("listar usuarios")
 			fmt.Println("-------------------------------------")
-			//listar(c, email, cmd)
+			obtenerUsuarios(c, email)
 
 		case "leer":
 			fmt.Println("leer los mensajes")
 		case "enviar":
 			fmt.Println("enviar mensaje")
+		case "salir":
 
+			fmt.Println("Hasta la vista...")
+			break
 		default:
 			fmt.Println("Comando no reconocido")
 
 		}
-
-		// 	// for _, com := range comandos {
-		// 	// 	fmt.Println(com)
-
-		// 	// }
-		// 	// fmt.Println(strings.Compare("hi", text))
-
-		// 	// if strings.Compare("hi", text) == 0 {
-		// 	// 	fmt.Println("hello, Yourself")
-		// 	// }
 
 	}
 
