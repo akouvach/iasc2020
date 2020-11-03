@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"encoding/json"
 
 	"github.com/gorilla/websocket"
@@ -19,20 +21,72 @@ import (
 
 var addr = flag.String("addr", "localhost:8080", "http service address")
 
+var canalActual string
+
+var mensajesPorCanal []MensajeCanal
+var mMensajesPorCanal sync.Mutex
+
+func agregarMensaje(mc MensajeCanal) {
+	mMensajesPorCanal.Lock()
+	mensajesPorCanal = append(mensajesPorCanal, mc)
+	mMensajesPorCanal.Unlock()
+}
+
 // br "../broker"
-func mensajesSinLeer() {
-	fmt.Println("Mensajes sin leer")
+func obtenerMensajesPorCanal(c *websocket.Conn, email string) {
+
+	msg := Mensaje{
+		ID:       email,
+		Destino:  "server",
+		Tipo:     "auto",
+		Persiste: true,
+		Payload:  "obtenerMensajesPorCanal",
+	}
+
+	//Envio mensajes
+	err := enviarMensaje(c, msg)
+	if err != nil {
+		fmt.Println("Error al enviar mensaje: ", msg)
+	}
+
+}
+
+func agregarMensajesCanal(m Mensaje) {
+
+	var mensajesCanal []MensajeCanal
+
+	err2 := json.Unmarshal([]byte(m.Payload), &mensajesCanal)
+	if err2 != nil {
+		fmt.Println("Error! al unmarshall del payload", err2)
+	}
+
+	for _, m := range mensajesCanal {
+		fmt.Println("Agregando..", m)
+		agregarMensaje(m)
+	}
+
+}
+
+func mostrarMensajesPorCanal() {
+	var resumen map[string]int
+	for _, m := range mensajesPorCanal {
+		v, existe := resumen[m.Canal]
+		if !existe {
+			resumen[m.Canal] = 1
+		} else {
+			resumen[m.Canal] = v + 1
+		}
+	}
+	fmt.Println("Resumen de canales")
+	fmt.Println(resumen)
+
 }
 func mostrarMenu(email string) {
 	fmt.Println("Message System - " + email)
 	fmt.Println("---------------------")
-	fmt.Println("Para enviar mensaje: enviar usuario mensaje")
+	fmt.Println("Para abrir chat: canal <nombre> del canal")
 	fmt.Println("Para listar usuarios: listar")
-	fmt.Println("Para leer los mensajes: leer canal")
-	fmt.Println("---------------------")
-	fmt.Println("Mensajes sin leer")
-	fmt.Println("---------------------")
-	mensajesSinLeer()
+	mostrarMensajesPorCanal()
 
 }
 
@@ -46,7 +100,7 @@ func recibirDelServidor(conn *websocket.Conn, c chan string) {
 			return
 		}
 
-		//se lo envio al cana que lo procesara
+		//se lo envio al canal que lo procesara
 		c <- string(msg)
 	}
 }
@@ -65,6 +119,33 @@ func mostrarUsuarios(m Mensaje) {
 	}
 }
 
+func cargarMensajesLocalmente(m Mensaje) {
+
+	var mensajes []MensajeCanal
+
+	err2 := json.Unmarshal([]byte(m.Payload), &mensajes)
+	if err2 != nil {
+		fmt.Println("Error! al unmarshall del payload", err2)
+	}
+
+	for _, m := range mensajes {
+		agregarMensaje(m)
+	}
+}
+
+func mostrarMensajes(m Mensaje) {
+
+	var mensajes []MensajeCanal
+
+	err2 := json.Unmarshal([]byte(m.Payload), &mensajes)
+	if err2 != nil {
+		fmt.Println("Error! al unmarshall del payload", err2)
+	}
+
+	for _, m := range mensajes {
+		fmt.Println(m.ID, m.Mensaje)
+	}
+}
 func procesarMensajeDelServidor(conn *websocket.Conn, c chan string, email string) {
 	//defer close(done)
 	for msg := range c {
@@ -77,22 +158,31 @@ func procesarMensajeDelServidor(conn *websocket.Conn, c chan string, email strin
 			fmt.Println("Error! al unmarshall del mensaje recibido", err)
 		}
 
-		//ya tengo el mensaje recibid
-		//en funcion del tipo es que se lo mando a otro
-		//para procesarlo
+		//ya tengo el mensaje recibido
+		//en funcion del tipo es que se lo mando a otro para procesarlo
 
 		if m.Tipo == "auto" && m.ID == "server" {
 			//corresponden a peticiones que se le hicieron al servidor
+			fmt.Println("recibido...", m.Destino)
 			switch m.Destino {
 			case "listarUsuarios":
 				mostrarUsuarios(m)
+			case "obtenerMensajesPorCanal":
+				cargarMensajesLocalmente(m)
 			default:
 				fmt.Println("funcionalidad no itentificada")
 			}
 
+		} else if m.Tipo == "direct" {
+			//Es un mensaje que va para algun canal
+			//El canal figura en el campo Destino
+			fmt.Println("Es de tipo direct")
+
+		} else {
+			fmt.Println("no se reconoce el tipo de mensaje...", m)
 		}
 
-		mostrarMenu(email)
+		//mostrarMenu(email)
 
 	}
 }
@@ -105,7 +195,7 @@ func connect(email string) *websocket.Conn {
 
 	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
-		log.Fatal("dial:", err)
+		log.Fatal("No se pudo conectar con el servidor :", err)
 	}
 	//fmt.Println(fmt.Sprintf("-------Nueva conexion %d ------", i))
 
@@ -188,11 +278,14 @@ func enviarMensaje(ws *websocket.Conn, m Mensaje) error {
 		return err
 	}
 
+	fmt.Println("enviando mensaje al canal")
 	err2 := ws.WriteMessage(websocket.TextMessage, msg)
 	if err2 != nil {
 		fmt.Println("error al enviar mensaje desde el cliente", err2)
 		return err2
 	}
+
+	fmt.Println("mensaje enviado correctamente.")
 
 	return nil
 
@@ -216,6 +309,54 @@ func obtenerUsuarios(c *websocket.Conn, email string) {
 
 }
 
+func mostrarMensajesCanal(canalActual string, c *websocket.Conn, email string) {
+
+	msg := Mensaje{
+		ID:       email,
+		Destino:  canalActual,
+		Tipo:     "auto",
+		Persiste: true,
+		Payload:  "listarMensajes",
+	}
+
+	//Envio mensajes
+	err := enviarMensaje(c, msg)
+	if err != nil {
+		fmt.Println("Error al enviar mensaje: ", msg)
+	}
+
+}
+
+func saludar(c *websocket.Conn, email string,  saludo string) {
+	// Envia un buenos dias al canal actual
+	var mc MensajeCanal
+
+	mc.ID = uuid.New().String()
+	mc.Canal = canalActual
+	mc.Fecha = time.Now().String()
+	mc.Mensaje = saludo
+
+	mcAux, err2 := json.Marshal(mc)
+	if err2!=nil{
+		fmt.Println("Error al marshaling...", err2)
+		return
+	}
+
+	var m Mensaje
+	m.Destino = canalActual
+	m.ID = email
+	m.Tipo = "auto"
+	m.Payload = string(mcAux)
+
+	err := enviarMensaje(c, m)
+
+	if err!=nil {
+		fmt.Println("error al enviar mensaje... ", err)
+	}
+	fmt. Println("mensaje enviado correctamente")
+
+
+}
 func main() {
 
 	args := os.Args[1:]
@@ -225,8 +366,6 @@ func main() {
 	email := args[0]
 	fmt.Println("Bienvenido ", email)
 
-	myReader := bufio.NewReader(os.Stdin)
-
 	c := connect(email)
 	defer c.Close()
 
@@ -234,45 +373,66 @@ func main() {
 	ch := make(chan string)
 	defer close(ch) // cierro el canal cuando termine
 
+	obtenerMensajesPorCanal(c, email)
+
+	canalActual = "general"
+	saludar(c, email,"hola mundo")
+
 	go recibirDelServidor(c, ch) //a este canal, llegaran los mensajes del servidor
 
 	go procesarMensajeDelServidor(c, ch, email) // el anterior canal, se los mandara a este, para procesar
 
+	mostrarMenu(email)
+
+mainCicle:
 	for {
-		mostrarMenu(email)
-		fmt.Print("-> ")
-		text, _ := myReader.ReadString('\n')
-		// convert CRLF to LF
-		//text = strings.Replace(text, "\n", " ", -1)
+		fmt.Print(canalActual + ">_ ")
 
-		var cmd []string
-		comandos := strings.Split(text, " ")
-		for _, element := range comandos {
-			cmd = append(cmd, strings.ToLower(strings.Trim(element, "")))
+		in := bufio.NewReader(os.Stdin)
+		line, err := in.ReadString('\n')
+		if err != nil {
+			log.Fatal(err)
 		}
+		line = strings.Replace(line, "\n", "", -1)
+		line = strings.Replace(line, "\r", "", -1)
 
-		fmt.Println(cmd)
+		if canalActual == "" {
 
-		com := string(cmd[0])
-		fmt.Println(com, len(com))
+			strs := strings.Split(line, " ")
 
-		switch com {
-		case "listar":
-			fmt.Println("listar usuarios")
-			fmt.Println("-------------------------------------")
-			obtenerUsuarios(c, email)
+			com := strs[0]
 
-		case "leer":
-			fmt.Println("leer los mensajes")
-		case "enviar":
-			fmt.Println("enviar mensaje")
-		case "salir":
+			fmt.Println("Comando-"+com+"-", len(com))
+			switch {
+			case strings.Compare(com, "listar") == 0:
+				fmt.Println("listar usuarios")
+				fmt.Println("-------------------------------------")
+				obtenerUsuarios(c, email)
+				fmt.Println("---Presione una tecla para continuar---")
+				fmt.Scanln()
 
-			fmt.Println("Hasta la vista...")
-			break
-		default:
-			fmt.Println("Comando no reconocido")
+			case strings.Compare(com, "canal") == 0:
+				fmt.Println("Canal", strs[1])
+				canalActual = strs[1]
 
+				fmt.Println("---Presione una tecla para continuar---")
+				fmt.Scanln()
+
+			case strings.Compare(com, "salir") == 0:
+
+				fmt.Println("Hasta la vista...")
+				break mainCicle
+			default:
+				fmt.Println("Comando no reconocido")
+				fmt.Println("---Presione una tecla para continuar---")
+				fmt.Scanln()
+
+			}
+
+		} else {
+			//Estoy en un canal.  Voy a mostrar los mensajes
+			mostrarMensajesCanal(canalActual, c, email)
+			fmt.Println("---------------------------------------------------->")
 		}
 
 	}

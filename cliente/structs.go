@@ -36,3 +36,11 @@ type Mensaje struct {
 	Persiste bool   `json:"persiste"`
 	Payload  string `json:"payload"`
 }
+
+//MensajeCanal es lo que almacenan los mensajes del canal
+type MensajeCanal struct {
+	ID      string `json:"id"`
+	Canal   string `json:"canal"`
+	Fecha   string `json:"fecha"`
+	Mensaje string `json:"mensaje"`
+}

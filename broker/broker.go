@@ -8,31 +8,28 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 )
 
-// bd "../bd"
-// ed "../ed"
-//Enviar es para agregar un mensaje al canal
-// func Enviar(canal string, mensaje string) {
-// 	bd.Agregar(canal, mensaje)
-// }
-
-//Leer es para leer la base de datos
-// func Leer() {
-// 	bd.Leer()
-// }
-
-//  ListarUsuarios es para leer la base de datos
-// func ListarUsuarios() []ed.Usuario {
-// 	return bd.ListarUsuarios()
-// }
-
 //Clientes son el conjunto de cliente conectados
 var Clientes = make(map[string]Cliente)
 var mClientes sync.Mutex
+
+func agregarCliente(c Cliente) {
+	mClientes.Lock()
+	Clientes[c.email] = c
+	BDAgregarClienteConectado(c.email)
+	mClientes.Unlock()
+	log.Println("Nuevo Cliente conectado", len(Clientes), c.email)
+}
+
+func eliminarCliente(c Cliente) {
+	mClientes.Lock()
+	delete(Clientes, c.email)
+	BDEliminarUsuarioConectado(c.email)
+	mClientes.Unlock()
+}
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -43,7 +40,37 @@ func homePage(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Para suscribirse ir a /ws")
 }
 
-func listarUsuarios(m Mensaje, c *Cliente, mt int) error {
+func enviarMensaje(m Mensaje, c Cliente, dest string) error {
+	mensaje, err3 := json.Marshal(m)
+	if err3 != nil {
+		fmt.Println("error del Marshal de mensaje", err3)
+		return err3
+	}
+
+	//busco el cliente conectado a quien eviar el mensaje
+
+	fmt.Println("buscando cliente ", dest)
+
+	v, existe := Clientes[dest]
+	if existe {
+
+		fmt.Println("existe")
+		//le mando el mensaje
+		err4 := v.ws.WriteMessage(websocket.TextMessage, mensaje)
+		if err4 != nil {
+			// log.Fatal(err)
+			fmt.Println("Error enviando mensaje", err4)
+			return err4
+		}
+		fmt.Println("Mensaje enviado...", mensaje)
+
+	} else {
+		fmt.Println("no existe")
+	}
+
+	return nil
+}
+func listarUsuarios(m Mensaje, c Cliente) error {
 	rta, err := BDListarUsuarios()
 	if err != nil {
 		fmt.Println("error al listar usuarios", err)
@@ -64,6 +91,37 @@ func listarUsuarios(m Mensaje, c *Cliente, mt int) error {
 		Payload:  string(usuarios),
 	}
 
+	err3 := enviarMensaje(msg, c, "")
+	if err3 != nil {
+		fmt.Println("Error al enviar menajes", err3)
+		return err3
+	}
+
+	return nil
+
+}
+
+func obtenerMensajesPorCanal(m Mensaje, c Cliente) error {
+	rta, err := BDMensajesPorCanal(m.ID)
+	if err != nil {
+		fmt.Println("error al traer los mensajes", err)
+		return err
+	}
+
+	ms, err2 := json.Marshal(rta)
+	if err2 != nil {
+		fmt.Println("error del Marshal err2", err2)
+		return err2
+	}
+
+	msg := Mensaje{
+		ID:       "server",
+		Destino:  m.Payload,
+		Tipo:     "auto",
+		Persiste: true,
+		Payload:  string(ms),
+	}
+
 	mensaje, err3 := json.Marshal(msg)
 	if err3 != nil {
 		fmt.Println("error del Marshal de mensaje", err3)
@@ -73,7 +131,7 @@ func listarUsuarios(m Mensaje, c *Cliente, mt int) error {
 	//fmt.Println("usuarios", mensaje)
 	//fmt.Println("usuarios marshall", usuarios)
 
-	err4 := c.ws.WriteMessage(mt, mensaje)
+	err4 := c.ws.WriteMessage(websocket.TextMessage, mensaje)
 	if err4 != nil {
 		// log.Fatal(err)
 		fmt.Println("Error enviando mensaje", err4)
@@ -84,9 +142,9 @@ func listarUsuarios(m Mensaje, c *Cliente, mt int) error {
 
 }
 
-func procesarMensaje(m Mensaje, c *Cliente, mt int) {
+func procesarMensaje(m Mensaje, c Cliente) {
 
-	fmt.Println("procesando mensaje", m, c)
+	fmt.Println("procesando mensaje...", m, c)
 
 	// name := [][]byte{msg, []byte("from server")}
 	// sep := []byte("-")
@@ -98,21 +156,55 @@ func procesarMensaje(m Mensaje, c *Cliente, mt int) {
 		switch m.Payload {
 		case "listarUsuarios":
 			fmt.Println("listar.")
-			listarUsuarios(m, c, mt)
+			listarUsuarios(m, c)
+		case "obtenerMensajesPorCanal":
+			fmt.Println("obteniendo mensajes por canal.")
+			obtenerMensajesPorCanal(m, c)
 
 		default:
 			fmt.Println("Payload no reconocido")
 		}
 
+	} else {
+		// Me est[an pidiendo algo por canal indicado en el campo Destino
+		enviarMensajeAlCanal(m.Destino, m.Payload, c)
 	}
 
 }
 
-func suscribirse(canal string, c *Cliente) {
+func enviarMensajeAlCanal(canal string, msg string, c Cliente) {
+
+	fmt.Println("enviando mensaje al canal..")
+	BDEnviarMensajeCanal(canal, msg)
+	// clientes, err := BDClientesPorCanal(canal, c.email)
+	// if err != nil {
+	// 	fmt.Println("Error al traer los suscriptores", err)
+	// }
+	// for _, clie := range clientes {
+	// 	//Le debo enviar el mensaje
+	// 	m := Mensaje{
+	// 		ID:       c.email,
+	// 		Destino:  clie,
+	// 		Tipo:     "auto",
+	// 		Persiste: true,
+	// 		Payload:  msg,
+	// 	}
+
+	// 	fmt.Println("Le voy enviar un mensaje a ", clie)
+	// 	err := enviarMensaje(m, 0, c, clie)
+	// 	if err != nil {
+	// 		fmt.Println("Error al envio del mensaje", err)
+	// 	}
+
+	// }
+
+}
+
+func suscribirse(canal string, c Cliente) {
 	ch := make(chan string)
 
 	go func() {
-		err := BDSuscribir("general", ch)
+		err := BDSuscribir(canal, ch, c)
 		if err != nil {
 			fmt.Println("error al suscribir", err)
 		}
@@ -121,14 +213,40 @@ func suscribirse(canal string, c *Cliente) {
 	// Consume messages.
 	for msg := range ch {
 		fmt.Println("Mensaje recibido", c.email, msg)
+		//Ahora se lo tengo que mandar al cliente
+		fmt.Println("enviando mensaje al cliente")
+
+
+		msg := Mensaje{
+			ID:       "server",
+			Destino:  canal,
+			Tipo:     "auto",
+			Persiste: true,
+			Payload:  msg,
+		}
+	
+		mensaje, err3 := json.Marshal(msg)
+		if err3 != nil {
+			fmt.Println("error del Marshal de mensaje", err3)
+			return
+		}
+	
+		//fmt.Println("usuarios", mensaje)
+		//fmt.Println("usuarios marshall", usuarios)
+	
+		err4 := c.ws.WriteMessage(websocket.TextMessage, mensaje)  //no se si esta bien pone 0 en messagetype
+		if err4 != nil {
+			// log.Fatal(err)
+			fmt.Println("Error enviando mensaje", err4)
+		}
+		fmt.Println("mensaje enviado correctamente al cliente")
+	
 	}
 
 }
-func leerMensajesDeCliente(client *Cliente) {
 
-	//Cargo las suscripciones de este Cliente
-
-	suscripciones, err := BDCanalesSuscriptos(client.email)
+func suscribirseACanales(c Cliente){
+	suscripciones, err := BDCanalesSuscriptos(c.email)
 	if err != nil {
 		fmt.Println("No se obtuvieron las suscripciones", err)
 	}
@@ -136,27 +254,39 @@ func leerMensajesDeCliente(client *Cliente) {
 	// si no esta suscripto a ninguno, lo agrego al general
 	if len(suscripciones) == 0 {
 		fmt.Println("no tiene suscripciones")
-		go suscribirse("general", client)
+		suscribirse("general", c)
+	} else {
+		//Me suscribo a cada canal de los que anteriormente se habia suscripto
+		for _, s := range suscripciones {
+			suscribirse(s.Canal, c)
+		}
 	}
 
-	//Me suscribo a cada canal
-	for _, s := range suscripciones {
-		go suscribirse(s.Nombre, client)
-	}
+}
+
+func leerMensajesDeCliente(c Cliente) {
+
+	//Cargo las suscripciones de este Cliente
+
+	go suscribirseACanales(c)
+
 
 	// Me quedo esperando instrucciones individuales
 	for {
 
-		messageType, msg, err := client.ws.ReadMessage()
+		messageType, msg, err := c.ws.ReadMessage()
 		if err != nil {
 
-			eliminarCliente(*client)
+			eliminarCliente(c)
 
-			client.ws.Close()
+			c.ws.Close()
 			fmt.Println("Cliente eliminado.  Restantes:", len(Clientes))
 
 			return
 		}
+
+		fmt.Println("recibiendo mensaje de ", c.email)
+
 		reader := strings.NewReader(string(msg))
 
 		dec := json.NewDecoder(reader)
@@ -168,54 +298,11 @@ func leerMensajesDeCliente(client *Cliente) {
 		}
 
 		//Procesar mensaje
-		fmt.Println("Procesando", messageType)
-		go procesarMensaje(m, client, messageType)
+		fmt.Println("Procesando mensaje recibido", messageType)
+		go procesarMensaje(m, c)
 
-		// // en M, tengo el mensaje.  Lo agrego a la lista de mensajes
-		// _, err = BDAgregarMensaje(m)
-		// if err != nil {
-		// 	fmt.Println("Error al agregar mensaje")
-		// }
-
-		//fmt.Println("Mensaje del Cliente", m)
-
-		// name := [][]byte{msg, []byte("from server")}
-		// sep := []byte("-")
-
-		// err = client.ws.WriteMessage(messageType, bytes.Join(name, sep))
-		// if err != nil {
-		// 	// log.Fatal(err)
-		// 	fmt.Println(err)
-		// 	return
-		// }
 	}
 }
-
-func agregarCliente(c Cliente) {
-	mClientes.Lock()
-	Clientes[c.ID] = c
-	BDAgregarUsuarioConectado(c.email)
-	mClientes.Unlock()
-}
-
-func eliminarCliente(c Cliente) {
-	mClientes.Lock()
-	delete(Clientes, c.ID)
-	BDEliminarUsuarioConectado(c.email)
-	mClientes.Unlock()
-}
-
-// func agregarServicio(s Servicio) {
-// 	mServicios.Lock()
-// 	Servicios[s.nombre] = s
-// 	mServicios.Unlock()
-// }
-
-// func eliminarServicio(s Servicio) {
-// 	mServicios.Lock()
-// 	delete(Servicios, s.nombre)
-// 	mServicios.Unlock()
-// }
 
 func wsEndPoint(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -229,27 +316,21 @@ func wsEndPoint(w http.ResponseWriter, r *http.Request) {
 		log.Fatal(err)
 	}
 
-	myUUID, err := uuid.NewUUID()
-	if err != nil {
-		log.Fatal("No se pudo generar el uuid")
-	}
 	// lo agrego a mi lista de usuarios conectados
 	var nc Cliente
-	nc.ID = myUUID.String()
 	nc.email = vars["email"]
 	nc.ws = ws
 
+	//Agregar a mi lista de Clientes conectados
 	agregarCliente(nc)
 
-	log.Println("Nuevo Cliente conectado", len(Clientes))
-	//fmt.Println(Clientes)
-
-	leerMensajesDeCliente(&nc)
+	leerMensajesDeCliente(nc)
 }
 
 func main() {
 
-	BDAgregarUsuarios(5)
+	BDAgregarUsuarios(2)
+	BDLeer()
 
 	r := mux.NewRouter()
 

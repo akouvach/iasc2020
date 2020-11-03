@@ -17,6 +17,9 @@ const US = "usuarios"
 //SUS es la estructura que mantiene la lista de suscripciones
 const SUS = "suscripciones"
 
+//MESSAGES es la estructura que mantiene la lista de mensajes
+const MESSAGES = "mensajes"
+
 func connectRedis() *redis.Client {
 	client := redis.NewClient(&redis.Options{
 		Addr:     "localhost:6379",
@@ -71,8 +74,8 @@ func BDAgregarMensaje(m Mensaje) (int, error) {
 
 }
 
-//BDAgregarUsuarioConectado agrega un usuario cuando se inicia sesion
-func BDAgregarUsuarioConectado(email string) (int, error) {
+//BDAgregarClienteConectado agrega un usuario cuando se inicia sesion
+func BDAgregarClienteConectado(email string) (int, error) {
 
 	rdb := connectRedis()
 	defer rdb.Close()
@@ -83,25 +86,118 @@ func BDAgregarUsuarioConectado(email string) (int, error) {
 	}
 	fmt.Println("Agregar usuarios conectado ", email)
 
-	//usuarios := rdb.LRange(UC, 0, 10)
-	// if err != nil {
-	// 	if err == redis.Nil {
-	// 		fmt.Println("key does not exists")
-	// 		return 0, err
-	// 	}
-	// 	return 0, err
-	// }
-	//fmt.Println("usuarios", usuarios)
-
 	return 1, nil
 
 }
 
-//BDSuscribir agrega un usuario cuando se inicia sesion
-func BDSuscribir(canal string, c chan string) error {
+func bdAgregarSuscripcion(canal string, c Cliente) error {
+	rdb := connectRedis()
+	defer rdb.Close()
+
+	cant, err := rdb.LLen(SUS).Result()
+	if err != nil {
+		return err
+	}
+
+	sus, err2 := rdb.LRange(SUS, 0, cant).Result()
+	if err2 != nil {
+		return err2
+	}
+
+	fmt.Println(sus)
+
+	lExisteCanal := false
+
+	for i, s := range sus {
+
+		var suscrip Suscripcion
+
+		err = json.Unmarshal([]byte(s), &suscrip)
+		if err != nil {
+			fmt.Println("Error! al unmarshall de Suscripcion")
+			return err
+		}
+
+		fmt.Println("comparando ", suscrip.Canal, canal)
+		if suscrip.Canal == canal {
+			//encontre al canal indicado
+			fmt.Println("encontre al canal indicado")
+			lExisteCanal = true
+
+			//ahora me fijo si esta suscripto
+			lEncontrado := false
+			for _, p := range suscrip.Participantes {
+				if p == c.email {
+					//esta en esta suscripcion.
+					lEncontrado = true
+					break
+				}
+			}
+			if !lEncontrado {
+				//Agrego este usuario a la lista
+				suscrip.Participantes = append(suscrip.Participantes, c.email)
+
+				//Actualizo la suscripcion en redis
+				susc, err := json.Marshal(suscrip)
+				if err != nil {
+					return err
+				}
+
+				rta, err2 := rdb.LSet(SUS, int64(i), string(susc)).Result()
+				if err2 != nil {
+					return err2
+				}
+				fmt.Println("Actualizacion de suscripcion:", rta)
+
+			}
+
+		}
+
+	}
+
+	if !lExisteCanal {
+
+		fmt.Println("No existe el canal")
+		//tengo que agregar el canal con este participante
+		var sus Suscripcion
+
+		sus.Creador = c.email
+		sus.ID = int(cant) + 1
+		sus.Canal = canal
+		sus.Participantes = append(sus.Participantes, c.email)
+
+		suscrip, err := json.Marshal(sus)
+		if err != nil {
+			return err
+		}
+
+		//Actualizo la suscripcion en redis
+		rta, err := rdb.LPush(SUS, string(suscrip)).Result()
+
+		if err != nil {
+			return err
+		}
+		fmt.Println("Actualizacion de suscripcion:", rta)
+
+	}
+
+	return nil
+
+}
+
+//BDSuscribir agrega un usuario a un canal
+func BDSuscribir(canal string, ch chan string, c Cliente) error {
 
 	rdb := connectRedis()
 	defer rdb.Close()
+
+	//Lo agrego a la lista de suscripciones
+	err2 := bdAgregarSuscripcion(canal, c)
+	if err2 != nil {
+		fmt.Println("error e agregar suscripcion")
+		return err2
+	}
+	fmt.Println("se suscribio al canal en redis ", canal, " correctamente")
 
 	//Me suscribo a un canal con mi mail
 	pubsub, err := rdb.Subscribe(canal)
@@ -109,7 +205,7 @@ func BDSuscribir(canal string, c chan string) error {
 		fmt.Println("error al suscribirse al canal")
 	}
 
-	fmt.Println("Suscrpcion correcta", pubsub)
+	fmt.Println("Suscrpcion correcta pubsub", pubsub)
 
 	for {
 		mess, err := pubsub.ReceiveMessage()
@@ -118,10 +214,41 @@ func BDSuscribir(canal string, c chan string) error {
 			break
 		}
 		//envio el mensage por el canal
-		c <- mess.String()
+
+		ch <- mess.String()
 	}
 
 	return nil
+
+}
+
+//BDClientesPorCanal te devuelve la lista de clientes asociados a un canal
+func BDClientesPorCanal(canal string, email string) ([]string, error) {
+
+	rdb := connectRedis()
+	defer rdb.Close()
+
+	var clie []string
+
+	cant, err := rdb.LLen(SUS).Result()
+	if err != nil {
+		return clie, err
+	}
+
+	clientes, err := rdb.LRange(SUS, 0, cant).Result()
+	if err != nil {
+		return clie, err
+	}
+
+	fmt.Println("suscripciones de ", canal, ": ", clientes)
+
+	for _, c := range clientes {
+		if c != email {
+			clie = append(clie, c)
+		}
+	}
+
+	return clie, nil
 
 }
 
@@ -143,7 +270,7 @@ func BDCanalesSuscriptos(email string) ([]Suscripcion, error) {
 		return usuSus, err
 	}
 
-	fmt.Println(suscripciones)
+	fmt.Println("suscripciones", suscripciones)
 
 	for _, s := range suscripciones {
 
@@ -156,7 +283,7 @@ func BDCanalesSuscriptos(email string) ([]Suscripcion, error) {
 		}
 
 		for _, p := range auxSus.Participantes {
-			if p.email == email {
+			if p == email {
 				//esta en esta suscripcion.  Agrego la suscripcion
 				usuSus = append(usuSus, auxSus)
 				break
@@ -165,6 +292,47 @@ func BDCanalesSuscriptos(email string) ([]Suscripcion, error) {
 	}
 
 	return usuSus, nil
+
+}
+
+//BDMensajesPorCanal son los mensajes de los canales suscriptos
+//del usuario
+func BDMensajesPorCanal(email string) ([]MensajeCanal, error) {
+
+	rdb := connectRedis()
+	defer rdb.Close()
+
+	var mensajes []MensajeCanal
+
+	cant, err := rdb.LLen(MESSAGES).Result()
+	if err != nil {
+		return mensajes, err
+	}
+
+	ms, err2 := rdb.LRange(MESSAGES, 0, cant).Result()
+	if err2 != nil {
+		return mensajes, err2
+	}
+
+	fmt.Println(ms)
+
+	for _, s := range ms {
+
+		var mc MensajeCanal
+
+		err = json.Unmarshal([]byte(s), &mc)
+		if err != nil {
+			fmt.Println("Error! al unmarshall del mensjae del Canal")
+			return mensajes, err
+		}
+
+		if mc.ID == email {
+			mensajes = append(mensajes, mc)
+		}
+
+	}
+
+	return mensajes, nil
 
 }
 
@@ -250,8 +418,23 @@ func BDListarUsuarios() ([]Usuario, error) {
 //BDAgregarUsuarios sirve para precargar la base
 func BDAgregarUsuarios(cant int) error {
 
+	
 	rdb := connectRedis()
 	defer rdb.Close()
+
+	client := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+	
+	pong, err := client.Ping().Result()
+	fmt.Println(pong, err)
+
+	c, err := rdb.LLen(US).Result()
+	if err != nil {
+		return err
+	}
 
 	for i := 1; i <= cant; i++ {
 		var usu Usuario
@@ -259,7 +442,7 @@ func BDAgregarUsuarios(cant int) error {
 		usu.Apellido = fmt.Sprintf("Kouvach%d", i)
 		usu.Email = fmt.Sprintf("akouvach@yahoo.com%d", i)
 		usu.Nombre = fmt.Sprintf("Andres%d", i)
-		usu.ID = i
+		usu.ID = int(c) + i
 
 		usuario, err := json.Marshal(usu)
 		if err != nil {
@@ -293,11 +476,25 @@ func BDAgregarUsuarios(cant int) error {
 	return nil
 }
 
-//Leer la base de datos
-func Leer() {
+//BDLeer la base de datos
+func BDLeer() {
 
 	client := connectRedis()
 	pong, err := client.Ping().Result()
 	fmt.Println("Leer", pong, err)
+
+}
+
+//BDEnviarMensajeCanal envía mensaje a un canal
+func BDEnviarMensajeCanal(canal string, mensaje string) {
+
+	client := connectRedis()
+	defer client.Close()
+
+	cant := client.Publish(canal, mensaje)
+
+	fmt.Println("mensae publicado en el canal..", cant, canal, mensaje)
+
+
 
 }

@@ -12,8 +12,10 @@ type Usuario struct {
 
 //Suscripcion corresponde a los diferentes suscriptores
 type Suscripcion struct {
-	Nombre        string
-	Participantes []Cliente
+	ID            int    `json:"id"`
+	Creador       string `json:"creador"`
+	Canal         string `json:"canal"`
+	Participantes []string
 }
 
 //Cliente corresponde a los clientes que se conectan al broker
@@ -35,4 +37,12 @@ type Mensaje struct {
 	Tipo     string `json:"tipo"`
 	Persiste bool   `json:"persiste"`
 	Payload  string `json:"payload"`
+}
+
+//MensajeCanal es lo que almacenan los mensajes del canal
+type MensajeCanal struct {
+	ID      string `json:"id"`
+	Canal   string `json:"canal"`
+	Fecha   string `json:"fecha"`
+	Mensaje string `json:"mensaje"`
 }
